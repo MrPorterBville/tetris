@@ -19,6 +19,11 @@ GRID_Y = 70
 FALL_EVENT = pygame.USEREVENT + 1
 FALL_MS = 500
 
+SCENE_START = "start"
+SCENE_CONTROLS = "controls"
+SCENE_PLAYING = "playing"
+SCENE_PAUSED = "paused"
+
 
 class Game:
     def __init__(self):
@@ -36,7 +41,8 @@ class Game:
         self.lines = 0
         self.level = 1
         self.game_over = False
-        self.paused = False
+        self.scene = SCENE_START
+        self.mode = "classic"
 
         self.board = [["x" for _ in range(GRID_HEIGHT)] for _ in range(GRID_WIDTH)]
         self.piece_queue = PieceQueue(GRID_WIDTH, preview_count=3)
@@ -44,6 +50,10 @@ class Game:
         self.saved_piece = None
         self.hold_used = False
         self.pause_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.start_option_rects = {}
+        self.controls_back_rect = pygame.Rect(0, 0, 0, 0)
+        self.pause_resume_rect = pygame.Rect(0, 0, 0, 0)
+        self.pause_menu_rect = pygame.Rect(0, 0, 0, 0)
 
         pygame.time.set_timer(FALL_EVENT, FALL_MS)
 
@@ -77,7 +87,7 @@ class Game:
             self.lines += cleared
             self.score += [0, 100, 300, 500, 800][cleared] * self.level
             self.level = 1 + self.lines // 10
-            speed = max(100, FALL_MS - (self.level - 1) * 35)
+            speed = FALL_MS if self.mode == "cozy" else max(100, FALL_MS - (self.level - 1) * 35)
             pygame.time.set_timer(FALL_EVENT, speed)
 
         self.current_piece = self.piece_queue.pull()
@@ -145,11 +155,13 @@ class Game:
             pass
         self.lock_piece()
 
-    def restart(self):
+    def start_game(self, mode):
+        self.mode = mode
         self.score = 0
         self.lines = 0
         self.level = 1
         self.game_over = False
+        self.scene = SCENE_PLAYING
         self.board = [["x" for _ in range(GRID_HEIGHT)] for _ in range(GRID_WIDTH)]
         self.piece_queue = PieceQueue(GRID_WIDTH, preview_count=3)
         self.current_piece = self.piece_queue.pull()
@@ -157,27 +169,66 @@ class Game:
         self.hold_used = False
         pygame.time.set_timer(FALL_EVENT, FALL_MS)
 
+    def go_to_main_menu(self):
+        self.scene = SCENE_START
+        self.game_over = False
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if self.pause_button_rect.collidepoint(event.pos) and not self.game_over:
-                    self.paused = not self.paused
+                if self.scene == SCENE_START:
+                    for option, rect in self.start_option_rects.items():
+                        if rect.collidepoint(event.pos):
+                            if option == "controls":
+                                self.scene = SCENE_CONTROLS
+                            else:
+                                self.start_game(option)
+                elif self.scene == SCENE_CONTROLS and self.controls_back_rect.collidepoint(event.pos):
+                    self.scene = SCENE_START
+                elif self.scene == SCENE_PLAYING:
+                    if self.pause_button_rect.collidepoint(event.pos) and not self.game_over:
+                        self.scene = SCENE_PAUSED
+                elif self.scene == SCENE_PAUSED:
+                    if self.pause_resume_rect.collidepoint(event.pos):
+                        self.scene = SCENE_PLAYING
+                    elif self.pause_menu_rect.collidepoint(event.pos):
+                        self.go_to_main_menu()
 
-            if event.type == FALL_EVENT and not self.game_over and not self.paused:
+            if event.type == FALL_EVENT and not self.game_over and self.scene == SCENE_PLAYING:
                 if not self.move(0, 1):
                     self.lock_piece()
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r and self.game_over:
-                    self.restart()
-                if event.key == pygame.K_p and not self.game_over:
-                    self.paused = not self.paused
-                if self.paused:
+                    self.start_game(self.mode)
+
+                if self.scene == SCENE_START:
+                    if event.key == pygame.K_1:
+                        self.start_game("classic")
+                    elif event.key == pygame.K_2:
+                        self.start_game("cozy")
+                    elif event.key == pygame.K_3:
+                        self.scene = SCENE_CONTROLS
                     continue
-                if self.game_over:
+                if self.scene == SCENE_CONTROLS:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                        self.scene = SCENE_START
+                    continue
+                if self.scene == SCENE_PAUSED:
+                    if event.key in (pygame.K_p, pygame.K_ESCAPE):
+                        self.scene = SCENE_PLAYING
+                    elif event.key == pygame.K_m:
+                        self.go_to_main_menu()
+                    continue
+
+                if self.scene != SCENE_PLAYING or self.game_over:
+                    continue
+
+                if event.key == pygame.K_p:
+                    self.scene = SCENE_PAUSED
                     continue
 
                 if event.key in (pygame.K_LEFT, pygame.K_a):
@@ -265,6 +316,13 @@ class Game:
                 )
 
     def draw_ui(self):
+        if self.scene == SCENE_START:
+            self.draw_start_screen()
+            return
+        if self.scene == SCENE_CONTROLS:
+            self.draw_controls_screen()
+            return
+
         board_right = GRID_X + GRID_WIDTH * BLOCK_SIZE
 
         title = self.font.render("Tetris", True, (240, 240, 240))
@@ -326,9 +384,9 @@ class Game:
         self.screen.blit(level_label, (stats_container.x + 12, stats_container.y + 108))
         self.screen.blit(level_value, (stats_container.right - level_value.get_width() - 12, stats_container.y + 104))
 
-        button_color = (95, 120, 190) if not self.paused else (100, 180, 120)
+        button_color = (95, 120, 190)
         pygame.draw.rect(self.screen, button_color, self.pause_button_rect, border_radius=8)
-        button_text = "Pause + Controls" if not self.paused else "Resume"
+        button_text = "Pause"
         button_surf = self.small_font.render(button_text, True, (245, 245, 245))
         self.screen.blit(
             button_surf,
@@ -338,32 +396,49 @@ class Game:
             ),
         )
 
-        if self.paused:
+        if self.scene == SCENE_PAUSED:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 160))
             self.screen.blit(overlay, (0, 0))
 
-            panel_rect = pygame.Rect(GRID_X + 40, GRID_Y + 80, 430, 430)
+            panel_rect = pygame.Rect(GRID_X + 60, GRID_Y + 140, 390, 260)
             pygame.draw.rect(self.screen, (35, 35, 45), panel_rect, border_radius=10)
             pygame.draw.rect(self.screen, (120, 120, 150), panel_rect, width=2, border_radius=10)
 
-            pause_title = self.font.render("Paused - Controls", True, (255, 255, 255))
+            pause_title = self.font.render("Paused", True, (255, 255, 255))
             self.screen.blit(
                 pause_title,
                 (panel_rect.centerx - pause_title.get_width() // 2, panel_rect.y + 24),
             )
 
-            controls = [
-                "A/D or <-/-> : Move",
-                "S or Down     : Soft drop",
-                "W or Up       : Rotate",
-                "Space         : Hard drop",
-                "C/Shift       : Save/Swap",
-                "P             : Pause/Resume",
-            ]
-            for i, text in enumerate(controls):
-                surf = self.small_font.render(text, True, (225, 225, 225))
-                self.screen.blit(surf, (panel_rect.x + 40, panel_rect.y + 90 + i * 45))
+            self.pause_resume_rect = pygame.Rect(panel_rect.x + 45, panel_rect.y + 95, panel_rect.width - 90, 56)
+            self.pause_menu_rect = pygame.Rect(panel_rect.x + 45, panel_rect.y + 170, panel_rect.width - 90, 56)
+
+            pygame.draw.rect(self.screen, (80, 160, 110), self.pause_resume_rect, border_radius=8)
+            pygame.draw.rect(self.screen, (145, 90, 90), self.pause_menu_rect, border_radius=8)
+
+            resume_text = self.small_font.render("Resume", True, (245, 245, 245))
+            menu_text = self.small_font.render("Main Menu", True, (245, 245, 245))
+            self.screen.blit(
+                resume_text,
+                (
+                    self.pause_resume_rect.centerx - resume_text.get_width() // 2,
+                    self.pause_resume_rect.centery - resume_text.get_height() // 2,
+                ),
+            )
+            self.screen.blit(
+                menu_text,
+                (
+                    self.pause_menu_rect.centerx - menu_text.get_width() // 2,
+                    self.pause_menu_rect.centery - menu_text.get_height() // 2,
+                ),
+            )
+
+            hint_text = self.small_font.render("P/Esc: Resume    M: Main Menu", True, (215, 215, 215))
+            self.screen.blit(
+                hint_text,
+                (panel_rect.centerx - hint_text.get_width() // 2, panel_rect.bottom - 36),
+            )
 
         if self.game_over:
             over = self.font.render("Game Over", True, (255, 120, 120))
@@ -371,10 +446,62 @@ class Game:
             self.screen.blit(over, (board_right + 30, GRID_Y + 300))
             self.screen.blit(restart, (board_right + 30, GRID_Y + 340))
 
+    def draw_start_screen(self):
+        title = self.flashy_font.render("TETRIS", True, (255, 245, 120))
+        subtitle = self.small_font.render("Choose a mode", True, (225, 225, 225))
+        self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 150))
+        self.screen.blit(subtitle, (SCREEN_WIDTH // 2 - subtitle.get_width() // 2, 200))
+
+        buttons = [
+            ("classic", "1. Classic"),
+            ("cozy", "2. Cozy"),
+            ("controls", "3. Controls"),
+        ]
+        self.start_option_rects = {}
+        for idx, (key, label) in enumerate(buttons):
+            rect = pygame.Rect(SCREEN_WIDTH // 2 - 180, 280 + idx * 90, 360, 64)
+            pygame.draw.rect(self.screen, (80, 90, 125), rect, border_radius=10)
+            text = self.font.render(label, True, (240, 240, 240))
+            self.screen.blit(text, (rect.centerx - text.get_width() // 2, rect.centery - text.get_height() // 2))
+            self.start_option_rects[key] = rect
+
+        classic_hint = self.small_font.render("Classic: speed increases with levels", True, (195, 195, 220))
+        cozy_hint = self.small_font.render("Cozy: fixed fall speed", True, (195, 195, 220))
+        self.screen.blit(classic_hint, (SCREEN_WIDTH // 2 - classic_hint.get_width() // 2, 580))
+        self.screen.blit(cozy_hint, (SCREEN_WIDTH // 2 - cozy_hint.get_width() // 2, 610))
+
+    def draw_controls_screen(self):
+        title = self.font.render("Controls", True, (245, 245, 245))
+        self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 130))
+
+        controls = [
+            "A/D or <-/-> : Move",
+            "S or Down     : Soft drop",
+            "W or Up       : Rotate",
+            "Space         : Hard drop",
+            "C/Shift       : Save/Swap",
+            "P             : Pause",
+        ]
+        for i, text in enumerate(controls):
+            surf = self.small_font.render(text, True, (230, 230, 230))
+            self.screen.blit(surf, (SCREEN_WIDTH // 2 - 140, 240 + i * 52))
+
+        self.controls_back_rect = pygame.Rect(SCREEN_WIDTH // 2 - 130, 610, 260, 56)
+        pygame.draw.rect(self.screen, (90, 120, 170), self.controls_back_rect, border_radius=8)
+        back_text = self.small_font.render("Back to Main Menu", True, (245, 245, 245))
+        self.screen.blit(
+            back_text,
+            (
+                self.controls_back_rect.centerx - back_text.get_width() // 2,
+                self.controls_back_rect.centery - back_text.get_height() // 2,
+            ),
+        )
+
     def draw(self):
         self.screen.fill((26, 26, 30))
-        self.draw_board()
-        if not self.game_over and not self.paused:
+        if self.scene in (SCENE_PLAYING, SCENE_PAUSED):
+            self.draw_board()
+        if self.scene == SCENE_PLAYING and not self.game_over:
             self.draw_current_piece()
         self.draw_ui()
 
